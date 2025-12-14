@@ -29,15 +29,26 @@ const TODOS_PERFILES = [
 
   // --- NUEVO PERFIL: MARCO LATERAL GUÍA (PARA TIPO 'Compacto') ---
   // Lee la misma columna 'S', pero es un material distinto.
+// 1. MARCO LATERAL IZQUIERDO (Compacto)
   { 
-    id: "BN_GP60-MLG", // ID único nuevo
-    nombre: "Marco Lateral Guía", // Nombre del nuevo material
-    columna: "S", // Misma columna de datos que el normal
-    multiplicador: 2, 
-    color: "#F9CB9C", // Un color naranja diferente para distinguirlo
-    nombreBase: "Marco Lateral Guía",
-    // NUEVO: Solo se activa si la columna 'Tipo' (E) contiene "Compacto"
-    tipoRequerido: ["Compacto"]
+    id: "BN_GP60-MLG-IZQ",        // ID Único para el stock
+    nombre: "Marco Lat. Compacto IZQ", // Nombre para mostrar
+    columna: "S",                 // Lee la misma medida de altura
+    multiplicador: 1,             // SOLO 1 UNIDAD
+    color: "#F9CB9C",             // Color naranja claro
+    nombreBase: "Marco Lat. Compacto IZQ",
+    tipoRequerido: ["Compacto"]   // Solo si es Compacto
+  },
+
+  // 2. MARCO LATERAL DERECHO (Compacto)
+  { 
+    id: "BN_GP60-MLG-DER",        // ID Único diferente
+    nombre: "Marco Lat. Compacto DER", 
+    columna: "S",                 // Lee la misma medida de altura
+    multiplicador: 1,             // SOLO 1 UNIDAD
+    color: "#E6B8AF",             // Un color ligeramente diferente para distinguir
+    nombreBase: "Marco Lat. Compacto DER",
+    tipoRequerido: ["Compacto"]   // Solo si es Compacto
   },
 
   // H10
