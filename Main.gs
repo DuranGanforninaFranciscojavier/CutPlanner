@@ -142,6 +142,8 @@ function ejecutarModoSolo() {
 
     // --- PASO 4: FINALIZACIÓN ---
     if (todosLosIdsParaMarcar.length > 0) {
+       generarVistaTecnicaAuto();
+       dividirTablaParaImpresionClonada();
        console.log("\n--- Marcando trabajos como REALIZADOS ---");
        marcarCortesComoHechos(hojaDatos, todosLosIdsParaMarcar);
     }
@@ -268,7 +270,10 @@ function ejecutarOptimizacion() {
     console.log(`--- 🏁 FIN OPTIMIZACIÓN en ${tiempoTotal}s ---`);
     
     if (trabajosProcesados > 0) {
+        generarVistaTecnicaAuto();
+        dividirTablaParaImpresionClonada();
         ui.alert(`✅ ¡Optimización Completada en ${tiempoTotal}s!\n\nRESUMEN:\n` + ALERTAS.join("\n"));
+
     } else {
         ui.alert(`ℹ️ No se encontraron trabajos nuevos pendientes.`);
     }

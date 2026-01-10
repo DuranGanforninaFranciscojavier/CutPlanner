@@ -92,13 +92,13 @@ function dividirTablaParaImpresionClonada() {
 
 
   // --- 6. APLICAR ANCHOS DE COLUMNA ---
+// Anchos forzados: [Serie(40), Perfil(130), Cortes(160), Resto(50)]
+  const anchosCompactos = [43, 120, 100, 50]; 
+
   for (let i = 0; i < numColsVisibles; i++) {
-    const ancho = anchosVisibles[i];
-    const indiceDestinoBase1 = i + 1;
-    // Aplicar a lado izquierdo
-    hojaDestino.setColumnWidth(indiceDestinoBase1, ancho);
-    // Aplicar a lado derecho
-    hojaDestino.setColumnWidth(colInicioDer + i, ancho);
+    const ancho = anchosCompactos[i];
+    hojaDestino.setColumnWidth(i + 1, ancho);              // Izquierda
+    hojaDestino.setColumnWidth(colInicioDer + i, ancho);   // Derecha
   }
   // Ajustar separador
   hojaDestino.setColumnWidth(numColsVisibles + 1, 20);
@@ -111,8 +111,11 @@ function dividirTablaParaImpresionClonada() {
   rangoCabeceras.setBackground("#434343") // Gris oscuro
                 .setFontColor("#ffffff") // Color blanco
                 .setFontWeight("bold");
-
+  // Forzar ajuste de texto (Wrap) y centrado vertical para que nada se corte
+  hojaDestino.getDataRange().setWrap(true).setVerticalAlignment("middle");
   hojaDestino.activate();
+  // Poner etiqueta CIAN (Impresión)
+  try { hojaDestino.setTabColor("#00FFFF"); } catch(e) {}
 }
 
 
