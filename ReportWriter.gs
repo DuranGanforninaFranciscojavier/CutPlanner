@@ -207,3 +207,31 @@ function generarInformeMaterial(ss, mapaResumen) {
     hoja.getRange("A2").setValue("No se necesita material nuevo.");
   }
 }
+/**
+ * Inserta una fila separadora en Plan_Cortes para agrupar visualmente los trabajos.
+ */
+function insertarSeparadorProyecto(nombreProyecto) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const hoja = ss.getSheetByName("Plan_Cortes");
+  if (!hoja) return;
+
+  const fecha = new Date().toLocaleString();
+  const texto = `📂 PROYECTO: ${nombreProyecto.toUpperCase()}  |  📅 ${fecha}`;
+
+  // Insertamos fila con el texto en la primera columna
+  // Asumimos estructura: [ID, Serie, Perfil, Largo, ... , Hecha]
+  // Ponemos 'TRUE' en la columna Hecha (Col 9) para que los filtros de impresión la ignoren
+  hoja.appendRow([texto, "", "", "", "", "", "", "", true]);
+
+  // Formato Visual (Fila completa fusionada o destacada)
+  const lastRow = hoja.getLastRow();
+  const rango = hoja.getRange(lastRow, 1, 1, 9);
+  
+  rango.setBackground("#FF9900") // Naranja Industrial (Visible)
+       .setFontColor("black")
+       .setFontWeight("bold")
+       .setBorder(true, true, true, true, true, true, "black", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+       
+  // Fusionamos las primeras celdas para que se lea el título
+  try { hoja.getRange(lastRow, 1, 1, 8).merge(); } catch(e) {}
+}

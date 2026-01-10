@@ -16,7 +16,7 @@ function onOpen() {
       .addItem('👁️ Cambiar Vista', 'actualizarVista')
       .addItem('🎨 Verificar Colores', 'verificarEstructuraYColores') 
       .addSeparator()
-      .addItem('📄 Generar PDF Taller', 'generarPDFTaller') // <--- AÑADE ESTA LÍNEA
+      .addItem('📄 Generar PDF Taller', 'generarPDFTaller') 
       .addToUi();
 }
 
@@ -29,23 +29,26 @@ function onOpen() {
  */
 function ejecutarModoSolo() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const ui = SpreadsheetApp.getUi();
   const horaInicioTotal = new Date();
   ALERTAS = []; 
   
   let resumenCompra = new Map(); 
   let todosLosIdsParaMarcar = []; 
   let todosLosRetalesGenerados = [];
+  let trabajosProcesados = 0;
 
   try {
     console.log("--- 🧮 INICIO MODO SOLO (PRODUCCIÓN SIN STOCK) ---");
     
+    // 1. SETUP COMÚN
     CONFIG = leerConfiguracion(ss);
     const hojaDatos = ss.getSheetByName(HOJA_DATOS_NOMBRE);
     const hojaHistorico = prepararHojaHistorico(ss);
-    prepararHojaHistorico(ss);
+    
+    // 2. SEPARADOR DE PROYECTO (Naranja)
+    gestionarSeparadorProyecto(hojaDatos);
 
-    // --- PASO 1: ANÁLISIS Y ORDENACIÓN DE TAREAS ---
+    // 3. ANÁLISIS Y ORDENACIÓN (Específico de Modo Solo)
     console.log("--- 📋 Analizando complejidad de tareas... ---");
     let tareasPendientes = [];
     const longitudBarraUtil = CONFIG.Longitud_Util;
@@ -54,7 +57,6 @@ function ejecutarModoSolo() {
       const trabajoPrevio = leerCortesPendientes(hojaDatos, configPerfil);
       const numCortes = trabajoPrevio.cortes.length;
       if (numCortes > 0) {
-        // Calculamos la longitud total necesaria para estimar barras mínimas
         const longitudTotalNecesaria = trabajoPrevio.cortes.reduce((sum, c) => sum + c.medida, 0);
         tareasPendientes.push({
           config: configPerfil,
@@ -63,105 +65,67 @@ function ejecutarModoSolo() {
         });
       }
     }
-    // Ordenar de más fácil (menos cortes) a más difícil
+    // Ordenar por complejidad
     tareasPendientes.sort((a, b) => a.numCortes - b.numCortes);
 
     if (tareasPendientes.length === 0) {
-       ui.alert(`ℹ️ No hay medidas pendientes (Checks desmarcados).`);
+       finalizarEjecucionComun(ss, 0, [], horaInicioTotal, "Modo Solo");
        return;
     }
 
-    // --- PASO 2: CÁLCULO DEL PRESUPUESTO DE TIEMPO ---
-    const TIEMPO_TOTAL_DISPONIBLE_SEG = 300; // 5 minutos totales para el script
+    // 4. CÁLCULO DEL PRESUPUESTO DE TIEMPO
+    const TIEMPO_TOTAL_DISPONIBLE_SEG = 300; 
     let pesoTotal = 0;
-    // Usamos el cuadrado de los cortes para dar mucho más peso a las tareas complejas
     tareasPendientes.forEach(t => { t.peso = t.numCortes * t.numCortes; pesoTotal += t.peso; });
     
-    console.log(`--- ⏱️ Presupuesto Total: ${TIEMPO_TOTAL_DISPONIBLE_SEG}s (Peso total: ${pesoTotal}) ---`);
     tareasPendientes.forEach(t => {
-      // Reparto proporcional con un mínimo de 15s por tarea
       t.tiempoAsignado = Math.max(15, Math.round((t.peso / pesoTotal) * TIEMPO_TOTAL_DISPONIBLE_SEG));
-      console.log(`   👉 ${t.config.nombre} (${t.numCortes} cortes): ${t.tiempoAsignado}s`);
     });
-    console.log("------------------------------------------");
 
-
-    // --- PASO 3: BUCLE PRINCIPAL DE PROCESAMIENTO ---
-    let trabajosProcesados = 0;
-    
+    // 5. BUCLE PRINCIPAL
     for (const tarea of tareasPendientes) { 
       const configPerfil = tarea.config;
       const nombrePerfil = configPerfil.nombre;
       const trabajo = leerCortesPendientes(hojaDatos, configPerfil); 
-      const numCortes = trabajo.cortes.length;
       
-      console.log(`\n▶️ PROCESANDO: ${nombrePerfil} (${numCortes} cortes) ---`);
+      console.log(`\n▶️ PROCESANDO: ${nombrePerfil} (${trabajo.cortes.length} cortes) ---`);
       todosLosIdsParaMarcar.push(...trabajo.cortes.map(c => c.id));
 
-      // A) Calcular Stock Virtual con HOLGURA
-      // Mínimo matemático si el ajuste fuera perfecto
+      // Stock Virtual con Holgura (x2)
       let barrasMinimasTeoricas = Math.ceil(tarea.longitudTotal / longitudBarraUtil);
-      
-      // ¡CRÍTICO! Damos el DOBLE de barras para garantizar que el motor siempre
-      // tenga la opción de abrir barra nueva en lugar de generar "zona muerta".
-      // El motor es eficiente y solo usará las necesarias.
       let barrasParaIntentar = barrasMinimasTeoricas * 2;
-      
-      console.log(`   ℹ️ Longitud total: ${tarea.longitudTotal}mm. Mínimo teórico: ${barrasMinimasTeoricas}. Stock virtual provisto: ${barrasParaIntentar} barras.`);
-      
       let stockVirtual = [];
       for (let i = 1; i <= barrasParaIntentar; i++) {
         stockVirtual.push(crearBarraVirtual(nombrePerfil, i));
       }
 
-      // B) Llamada ÚNICA al motor con stock abundante y tiempo asignado
-      // Ya no hay bucle while. Se lo juega todo a una carta con recursos de sobra.
       let solucionFinal = findSolution_v31(trabajo.cortes, stockVirtual, tarea.tiempoAsignado);
 
-      // C) Procesar Resultados
       if (solucionFinal) {
-        // Contamos cuántas barras virtuales se usaron realmente
         let barrasUsadasReales = solucionFinal.filter(b => b.esVirtual).length;
-        if (barrasUsadasReales > 0) {
-          resumenCompra.set(nombrePerfil, barrasUsadasReales);
-        }
+        if (barrasUsadasReales > 0) resumenCompra.set(nombrePerfil, barrasUsadasReales);
         
-        // Escribir histórico y guardar retales
         const [nuevosRetales, materialUsado] = escribirResultadosEnHistorico(hojaHistorico, solucionFinal, nombrePerfil, trabajo.cortes.length, "MODO_SOLO");
-        if (nuevosRetales && nuevosRetales.length > 0) {
-          todosLosRetalesGenerados.push(...nuevosRetales);
-        }
+        if (nuevosRetales && nuevosRetales.length > 0) todosLosRetalesGenerados.push(...nuevosRetales);
+        
+        trabajosProcesados++;
       } else {
-        // Si falla incluso con el doble de barras, es un problema serio.
-        console.error(`🛑 [ABORTADO] No se encontró solución para ${nombrePerfil} incluso con ${barrasParaIntentar} barras y ${tarea.tiempoAsignado}s.`);
-        ALERTAS.push(`❌ ${nombrePerfil}: Fallo de optimización complejo. Revisa reglas o tiempos.`);
+        console.error(`🛑 [ABORTADO] Fallo en ${nombrePerfil}`);
+        ALERTAS.push(`❌ ${nombrePerfil}: Fallo de optimización complejo.`);
       }
-      
-      trabajosProcesados++;
     } 
 
-    // --- PASO 4: FINALIZACIÓN ---
-    if (todosLosIdsParaMarcar.length > 0) {
-       generarVistaTecnicaAuto();
-       dividirTablaParaImpresionClonada();
-       console.log("\n--- Marcando trabajos como REALIZADOS ---");
-       marcarCortesComoHechos(hojaDatos, todosLosIdsParaMarcar);
-    }
-
-    console.log("--- Generando Informe Final ---");
+    // 6. FINALIZACIÓN ESPECÍFICA (Informe de Material)
+    console.log("--- Generando Informe Final de Material ---");
     generarInformeMaterial(ss, resumenCompra, todosLosRetalesGenerados);
     hojaHistorico.autoResizeColumns(1, CABECERAS_HISTORICO.length);
 
-    const tiempoTotal = ((new Date() - horaInicioTotal) / 1000).toFixed(1);
-    let mensajeFinal = `🧮 Cálculo Terminado (${tiempoTotal}s)\nSe han procesado ${trabajosProcesados} perfiles.`;
-    if (ALERTAS.length > 0) {
-        mensajeFinal += "\n\n⚠️ ATENCIÓN:\n" + ALERTAS.join("\n");
-    }
-    ui.alert(mensajeFinal);
+    // 7. FINALIZACIÓN COMÚN (Vistas, Alertas, Marcado)
+    finalizarEjecucionComun(ss, trabajosProcesados, todosLosIdsParaMarcar, horaInicioTotal, "Modo Solo");
 
   } catch (e) {
     console.error(e);
-    ui.alert("❌ ERROR CRÍTICO MODO SOLO:\n" + e.message);
+    SpreadsheetApp.getUi().alert("❌ ERROR CRÍTICO MODO SOLO:\n" + e.message);
   }
 }
 
@@ -169,22 +133,21 @@ function ejecutarModoSolo() {
  * ==============================================================================
  * MODO PRODUCCIÓN / INVENTARIO
  * - Usa el stock real de la hoja 'Inventario'.
- * - Si no hay suficiente, añade barras virtuales.
  * - Actualiza el inventario al terminar.
  * ==============================================================================
  */
 function ejecutarOptimizacion() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const ui = SpreadsheetApp.getUi();
   const horaInicioTotal = new Date();
   ALERTAS = []; 
   let todosLosIdsParaMarcar = []; 
-  // Tiempo límite fijo por intento en modo inventario (ej. 2 minutos)
+  let trabajosProcesados = 0;
   const TIEMPO_LIMITE_POR_INTENTO_SEG = 120; 
 
   try {
     console.log("--- 🚀 INICIO OPTIMIZACIÓN (MODO INVENTARIO) ---");
     
+    // 1. SETUP COMÚN
     CONFIG = leerConfiguracion(ss);
     const inventarioCompleto = leerInventario(ss);
     const configSheet = ss.getSheetByName(HOJA_CONFIG_NOMBRE);
@@ -196,8 +159,10 @@ function ejecutarOptimizacion() {
     const hojaHistorico = prepararHojaHistorico(ss);
     const huellasExistentes = cargarHuellasExistentes(hojaHistorico);
 
-    let trabajosProcesados = 0;
-    
+    // 2. SEPARADOR DE PROYECTO (Naranja)
+    gestionarSeparadorProyecto(hojaDatos);
+
+    // 3. BUCLE PRINCIPAL
     for (const configPerfil of TODOS_PERFILES) { 
       const nombrePerfil = configPerfil.nombre;
       const trabajo = leerCortesPendientes(hojaDatos, configPerfil);
@@ -206,28 +171,22 @@ function ejecutarOptimizacion() {
       console.log(`--- 🔄 Procesando: ${nombrePerfil} (${trabajo.cortes.length} cortes) ---`);
       
       if (huellasExistentes.has(trabajo.huella)) {
-        console.warn(`[Saltado] Plan idéntico ya existe para ${nombrePerfil}.`);
         ALERTAS.push(`--- ${nombrePerfil} ---\nℹ️ Plan saltado (ya existe en histórico).`);
         continue; 
       }
 
       ALERTAS.push(`--- ${nombrePerfil} ---`);
       
-      // Preparar stock real
       let stockDisponible = inventarioCompleto.filter(item => item.perfil === nombrePerfil);
       stockDisponible = sortStock(stockDisponible); 
 
-      // Bucle de intentos añadiendo barras virtuales si hace falta
       let barrasNuevasVirtuales = 0;
       let solucionFinal = null;
       let stockParaIntentar = [...stockDisponible]; 
-
-      // Límite de seguridad para barras virtuales
       const LIMITE_BARRAS_VIRTUALES = trabajo.cortes.length + 2;
 
       while (solucionFinal == null && barrasNuevasVirtuales <= LIMITE_BARRAS_VIRTUALES) {
         horaInicioAlgoritmo = new Date(); 
-        // Pasamos el tiempo límite fijo para este modo
         let solucionIntento = findSolution_v31(trabajo.cortes, stockParaIntentar, TIEMPO_LIMITE_POR_INTENTO_SEG);
         
         if (solucionIntento) {
@@ -235,8 +194,7 @@ function ejecutarOptimizacion() {
         } else {
           barrasNuevasVirtuales++;
           if (barrasNuevasVirtuales > LIMITE_BARRAS_VIRTUALES) {
-             console.error(`🛑 [ABORTADO INVENTARIO] Límite de barras virtuales excedido para ${nombrePerfil}.`);
-             ALERTAS.push(`❌ ${nombrePerfil}: No se encontró solución. Revisa el stock o las reglas.`);
+             ALERTAS.push(`❌ ${nombrePerfil}: No se encontró solución.`);
              break;
           }
           stockParaIntentar.push(crearBarraVirtual(nombrePerfil, barrasNuevasVirtuales));
@@ -244,9 +202,8 @@ function ejecutarOptimizacion() {
       } 
 
       if (solucionFinal) {
-        if (barrasNuevasVirtuales > 0) {
-          ALERTAS.push(`❗️ Se necesitaron ${barrasNuevasVirtuales} BARRAS NUEVAS adicionales.`);
-        }
+        if (barrasNuevasVirtuales > 0) ALERTAS.push(`❗️ Se necesitaron ${barrasNuevasVirtuales} BARRAS NUEVAS.`);
+        
         const [nuevosRetales, materialUsado] = escribirResultadosEnHistorico(hojaHistorico, solucionFinal, nombrePerfil, trabajo.cortes.length, trabajo.huella);
         actualizarInventario(ss, materialUsado, nuevosRetales);
         
@@ -258,28 +215,102 @@ function ejecutarOptimizacion() {
       }
     } 
     
-    if (todosLosIdsParaMarcar.length > 0) {
-      marcarCortesComoHechos(hojaDatos, todosLosIdsParaMarcar);
-    }
-
+    // 4. FINALIZACIÓN ESPECÍFICA (Inventario Visual)
     SpreadsheetApp.flush();
     aplicarFormatosInventario(configSheet, inventarioSheet); 
     SpreadsheetApp.flush(); 
 
-    const tiempoTotal = ((new Date() - horaInicioTotal) / 1000).toFixed(1);
-    console.log(`--- 🏁 FIN OPTIMIZACIÓN en ${tiempoTotal}s ---`);
-    
-    if (trabajosProcesados > 0) {
-        generarVistaTecnicaAuto();
-        dividirTablaParaImpresionClonada();
-        ui.alert(`✅ ¡Optimización Completada en ${tiempoTotal}s!\n\nRESUMEN:\n` + ALERTAS.join("\n"));
-
-    } else {
-        ui.alert(`ℹ️ No se encontraron trabajos nuevos pendientes.`);
-    }
+    // 5. FINALIZACIÓN COMÚN
+    finalizarEjecucionComun(ss, trabajosProcesados, todosLosIdsParaMarcar, horaInicioTotal, "Modo Producción");
 
   } catch (e) {
     console.error(e);
-    ui.alert("❌ ERROR MODO INVENTARIO:\n" + e.message);
+    SpreadsheetApp.getUi().alert("❌ ERROR MODO INVENTARIO:\n" + e.message);
+  }
+}
+
+/**
+ * ==============================================================================
+ * FUNCIONES AUXILIARES DE ORQUESTACIÓN
+ * ==============================================================================
+ */
+
+/**
+ * Detecta si hay trabajos pendientes e inserta el separador de proyecto en Plan_Cortes.
+ */
+/**
+ * Detecta si hay trabajos pendientes e inserta el separador de proyecto en Plan_Cortes.
+ * - Lee la Columna 23 (W) para obtener el Nombre del Proyecto.
+ */
+function gestionarSeparadorProyecto(hojaDatos) {
+  try {
+    const lastRow = hojaDatos.getLastRow();
+    if (lastRow < 3) return;
+
+    // Columna I (9) = Check Hecha
+    // Columna W (23) = Nombre Proyecto
+    // Leemos ambos rangos para cruzar datos
+    const rangoChecks = hojaDatos.getRange(3, 9, lastRow - 2, 1).getValues();
+    
+    // Verificamos si existe la columna W, si no, evitamos error
+    let rangoNombres;
+    if (hojaDatos.getMaxColumns() >= 23) {
+      rangoNombres = hojaDatos.getRange(3, 23, lastRow - 2, 1).getValues();
+    } else {
+      console.warn("⚠️ La hoja no tiene Columna W (23) para el nombre del proyecto.");
+      rangoNombres = new Array(lastRow - 2).fill([""]);
+    }
+    
+    // Buscamos la PRIMERA fila que esté pendiente (Check != TRUE)
+    for (let i = 0; i < rangoChecks.length; i++) {
+      const hecha = rangoChecks[i][0];
+      if (hecha !== true && String(hecha).toUpperCase() !== "TRUE") {
+        // Encontramos trabajo pendiente. ¿Qué proyecto es?
+        let nombreProyecto = rangoNombres[i][0];
+        
+        if (!nombreProyecto || nombreProyecto === "") {
+          nombreProyecto = "PROYECTO SIN NOMBRE (Revisar Col W)";
+        }
+        
+        // Insertamos separador y salimos (solo uno por lote)
+        if (typeof insertarSeparadorProyecto === 'function') {
+          insertarSeparadorProyecto(nombreProyecto);
+        }
+        return; 
+      }
+    }
+  } catch(e) {
+    console.warn("Error insertando separador: " + e);
+  }
+}
+
+/**
+ * Lógica común de cierre: Vistas, Marcado y Alertas.
+ */
+function finalizarEjecucionComun(ss, trabajosProcesados, idsParaMarcar, horaInicio, nombreModo) {
+  const ui = SpreadsheetApp.getUi();
+  const tiempoTotal = ((new Date() - horaInicio) / 1000).toFixed(1);
+
+  if (trabajosProcesados > 0) {
+    // 1. Generar Vistas Visuales
+    generarVistaTecnicaAuto();
+    dividirTablaParaImpresionClonada();
+
+    // 2. Marcar como realizados en la hoja de datos
+    if (idsParaMarcar.length > 0) {
+      console.log("\n--- Marcando trabajos como REALIZADOS ---");
+      marcarCortesComoHechos(ss.getSheetByName(HOJA_DATOS_NOMBRE), idsParaMarcar);
+    }
+
+    // 3. Alerta Final
+    let mensaje = `✅ ¡${nombreModo} Completado en ${tiempoTotal}s!\nSe procesaron ${trabajosProcesados} perfiles.`;
+    generarPDFTaller();
+    if (ALERTAS.length > 0) {
+      mensaje += "\n\n⚠️ RESUMEN:\n" + ALERTAS.join("\n");
+    }
+    ui.alert(mensaje);
+
+  } else {
+    ui.alert(`ℹ️ ${nombreModo}: No se encontraron trabajos nuevos pendientes.`);
   }
 }

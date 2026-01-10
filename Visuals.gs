@@ -1,168 +1,138 @@
 // ==============================================================================
 // SECCIÓN 1: CLONADOR DE TABLA PARA IMPRESIÓN (Plan_Cortes -> cortes_impresión)
 // ==============================================================================
-
 /**
- * CLONADOR DE TABLA CON SELECCIÓN EXPLÍCITA DE COLUMNAS
- * ----------------------------------------------------
- * REFLEXIÓN: Detectar columnas ocultas automáticamente en Apps Script es poco fiable.
- * SOLUCIÓN: Definimos manualmente qué columnas queremos en la impresión.
- * * Pasos:
- * 1. Define la lista exacta de columnas a imprimir (indicesVisibles).
- * 2. Busca la hoja "Plan_Cortes" y obtiene los anchos de esas columnas específicas.
- * 3. Crea/Resetea la hoja "cortes_impresión".
- * 4. Extrae los datos y formatos SOLO de la lista definida.
- * 5. Divide y pega en dos mitades.
+ * CLONADOR HÍBRIDO: FILTRA, IMPRIME Y MARCA COMO HECHO
+ * 1. Filtra filas pendientes (Hecha == FALSE).
+ * 2. Genera hoja con TUS anchos [43, 120, 100, 50].
+ * 3. Marca los originales como TRUE (Hecho).
  */
 function dividirTablaParaImpresionClonada() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const nombreHojaOrigen = "Plan_Cortes";
   const nombreHojaDestino = "cortes_impresión";
-  const filaCabecera = 1;
   const primeraFilaDatos = 2;
 
-  // --- 1. SETUP Y VALIDACIONES ---
+  // --- 1. LEER ORIGEN Y FILTRAR ---
   const hojaOrigen = ss.getSheetByName(nombreHojaOrigen);
-  if (!hojaOrigen) {
-    SpreadsheetApp.getUi().alert(`Error: No se encuentra la hoja "${nombreHojaOrigen}".`);
-    return;
-  }
+  if (!hojaOrigen) return;
 
   const ultimaFila = hojaOrigen.getLastRow();
   if (ultimaFila < primeraFilaDatos) {
-     SpreadsheetApp.getUi().alert(`La hoja "${nombreHojaOrigen}" no tiene datos suficientes.`);
-     return;
+    SpreadsheetApp.getUi().alert("⚠️ Plan_Cortes vacío.");
+    return;
   }
 
-  // --- 2. DEFINICIÓN EXPLÍCITA DE COLUMNAS A IMPRIMIR ---
-  // ESTA ES LA CLAVE: No intentamos detectar, definimos lo que queremos.
-  // Columnas típicas de taller: Serie(2), Perfil(3), Tipo(5), Cortes(7), Resto(8)
-  // ADAPTA ESTA LISTA SI QUIERES OTRAS.
-  const indicesVisibles = [2, 3, 7, 8]; 
+  // Detectar filas PENDIENTES (Columna I = 9)
+  const rangoCheck = hojaOrigen.getRange(primeraFilaDatos, 9, ultimaFila - primeraFilaDatos + 1, 1).getValues();
+  const indicesFilasValidas = []; // Guardará el número de fila REAL (Base 1)
   
-  const numColsVisibles = indicesVisibles.length;
-  const anchosVisibles = [];
-
-  // Obtenemos los anchos originales SOLO de las columnas seleccionadas
-  for (let i = 0; i < numColsVisibles; i++) {
-    const indiceReal = indicesVisibles[i];
-    // Validamos que la columna exista
-    if (indiceReal > hojaOrigen.getLastColumn()) {
-       SpreadsheetApp.getUi().alert(`Error: La columna ${indiceReal} no existe en el origen.`);
-       return;
+  for (let i = 0; i < rangoCheck.length; i++) {
+    const hecha = rangoCheck[i][0];
+    // Si NO está hecha (FALSE o vacío), la procesamos
+    if (hecha !== true && String(hecha).toUpperCase() !== "TRUE") {
+      indicesFilasValidas.push(primeraFilaDatos + i);
     }
-    anchosVisibles.push(hojaOrigen.getColumnWidth(indiceReal));
   }
 
-
-  // --- 3. PREPARAR HOJA DESTINO ---
+  // --- 2. PREPARAR DESTINO ---
   let hojaDestino = ss.getSheetByName(nombreHojaDestino);
   if (hojaDestino) ss.deleteSheet(hojaDestino);
   hojaDestino = ss.insertSheet(nombreHojaDestino, ss.getNumSheets());
+  try { hojaDestino.setTabColor("#00FFFF"); } catch(e) {}
 
+  if (indicesFilasValidas.length === 0) {
+    hojaDestino.getRange("A1").setValue("✅ Todo cortado. Historial limpio.");
+    return;
+  }
 
-  // --- 4. CÁLCULOS DE DIVISIÓN ---
-  const totalFilasDatos = ultimaFila - primeraFilaDatos + 1;
-  const filasPorMitad = Math.ceil(totalFilasDatos / 2);
-  const filaFinIzq = primeraFilaDatos + filasPorMitad - 1;
-  const filaInicioDer = filaFinIzq + 1;
+  // --- 3. CONFIGURACIÓN VISUAL (TUYA) ---
+  const indicesVisibles = [2, 3, 7, 8]; // Serie, Perfil, Cortes, Resto
+  const anchosCompactos = [44, 120, 100, 50]; // TUS ANCHOS
+  const numColsVisibles = indicesVisibles.length;
 
+  // --- 4. EXTRACCIÓN Y PEGADO ---
+  const totalItems = indicesFilasValidas.length;
+  const mitad = Math.ceil(totalItems / 2);
+  
+  const filasIzq = indicesFilasValidas.slice(0, mitad);
+  const filasDer = indicesFilasValidas.slice(mitad);
 
-  // --- 5. EXTRACCIÓN Y PEGADO DE DATOS FILTRADOS ---
-  // (Utiliza las funciones auxiliares definidas abajo)
-
-  // A) CABECERA
-  const datosCabecera = extraerDatosFiltrados(hojaOrigen, 1, 1, indicesVisibles);
+  // A) Cabecera (Fila 1 siempre)
+  const datosCabecera = extraerDatosFiltradosPorIndices(hojaOrigen, [1], indicesVisibles);
   pegarDatosFiltrados(hojaDestino, 1, 1, datosCabecera);
-  
-  // B) MITAD IZQUIERDA
-  const datosIzq = extraerDatosFiltrados(hojaOrigen, primeraFilaDatos, filasPorMitad, indicesVisibles);
-  pegarDatosFiltrados(hojaDestino, 2, 1, datosIzq);
 
-  // C) MITAD DERECHA
-  const colInicioDer = numColsVisibles + 2; // Dejamos 1 columna de separación
-  
+  // B) Mitad Izquierda
+  if (filasIzq.length > 0) {
+    const datosIzq = extraerDatosFiltradosPorIndices(hojaOrigen, filasIzq, indicesVisibles);
+    pegarDatosFiltrados(hojaDestino, 2, 1, datosIzq);
+  }
+
+  // C) Mitad Derecha
+  const colInicioDer = numColsVisibles + 2;
   pegarDatosFiltrados(hojaDestino, 1, colInicioDer, datosCabecera);
-  
-  const filasRestantes = totalFilasDatos - filasPorMitad;
-  if (filasRestantes > 0) {
-    const datosDer = extraerDatosFiltrados(hojaOrigen, filaInicioDer, filasRestantes, indicesVisibles);
+
+  if (filasDer.length > 0) {
+    const datosDer = extraerDatosFiltradosPorIndices(hojaOrigen, filasDer, indicesVisibles);
     pegarDatosFiltrados(hojaDestino, 2, colInicioDer, datosDer);
   }
 
-
-  // --- 6. APLICAR ANCHOS DE COLUMNA ---
-// Anchos forzados: [Serie(40), Perfil(130), Cortes(160), Resto(50)]
-  const anchosCompactos = [43, 120, 100, 50]; 
-
+  // --- 5. FORMATO FINAL ---
   for (let i = 0; i < numColsVisibles; i++) {
     const ancho = anchosCompactos[i];
     hojaDestino.setColumnWidth(i + 1, ancho);              // Izquierda
     hojaDestino.setColumnWidth(colInicioDer + i, ancho);   // Derecha
   }
-  // Ajustar separador
-  hojaDestino.setColumnWidth(numColsVisibles + 1, 20);
+  hojaDestino.setColumnWidth(numColsVisibles + 1, 20); // Separador
 
-
-  // --- 7. ESTILO FINAL DE CABECERAS ---
-  // Seleccionamos toda la fila 1 de la hoja de destino
-  const rangoCabeceras = hojaDestino.getRange(1, 1, 1, hojaDestino.getLastColumn());
-  // Aplicamos fondo gris y fuente blanca y negrita para que resalte
-  rangoCabeceras.setBackground("#434343") // Gris oscuro
-                .setFontColor("#ffffff") // Color blanco
-                .setFontWeight("bold");
-  // Forzar ajuste de texto (Wrap) y centrado vertical para que nada se corte
-  hojaDestino.getDataRange().setWrap(true).setVerticalAlignment("middle");
-  hojaDestino.activate();
-  // Poner etiqueta CIAN (Impresión)
-  try { hojaDestino.setTabColor("#00FFFF"); } catch(e) {}
-}
-
-
-/**
- * FUNCIÓN AUXILIAR (NECESARIA): Extrae datos y formatos solo de las columnas indicadas.
- */
-function extraerDatosFiltrados(hoja, filaInicio, numFilas, indicesVisibles) {
-  const ultimaColOrigen = hoja.getLastColumn();
-  // Leemos TODO el rango en memoria primero
-  const rangoCompleto = hoja.getRange(filaInicio, 1, numFilas, ultimaColOrigen);
+  const rangoCabeceras = hojaDestino.getRange("1:1");
+  rangoCabeceras.setBackground("#434343").setFontColor("#ffffff").setFontWeight("bold");
   
-  const valoresRaw = rangoCompleto.getDisplayValues(); 
-  const fondosRaw = rangoCompleto.getBackgrounds();
-  const fuentesRaw = rangoCompleto.getFontWeights();
-  const alineacionRaw = rangoCompleto.getHorizontalAlignments();
+  // --- CAMBIO: AJUSTE DE TEXTO Y TAMAÑO DE FUENTE 11 ---
+  hojaDestino.getDataRange()
+      .setWrap(true)
+      .setVerticalAlignment("middle")
+      .setFontSize(11); // <--- TAMAÑO 11 IMPUESTO
 
-  // Matrices de destino
-  const valoresFiltrados = [];
-  const fondosFiltrados = [];
-  const fuentesFiltradas = [];
-  const alineacionFiltrada = [];
+  // --- 6. MARCAR COMO HECHO EN ORIGEN (CRÍTICO) ---
+  // Recorremos la lista de lo que acabamos de imprimir y ponemos check TRUE
+  indicesFilasValidas.forEach(fila => {
+    hojaOrigen.getRange(fila, 9).setValue(true); // Col 9 = Hecha
+  });
+  
+  hojaDestino.activate();
+}
+/**
+ * NUEVA AUXILIAR: Extrae filas sueltas y REDONDEA números.
+ */
+function extraerDatosFiltradosPorIndices(hoja, indicesFilas, indicesCols) {
+  const valoresFiltrados = [], fondosFiltrados = [];
+  const fuentesFiltradas = [], alineacionFiltrada = [];
 
-  for (let f = 0; f < numFilas; f++) {
+  indicesFilas.forEach(filaNum => {
     const filaVal = [], filaFon = [], filaFue = [], filaAli = [];
-    // Iteramos solo sobre los índices que HEMOS DEFINIDO MANUALMENTE
-    for (let i = 0; i < indicesVisibles.length; i++) {
-      const colIdxArray = indicesVisibles[i] - 1; // Convertir índice base-1 a base-0
+    indicesCols.forEach(colNum => {
+      const celda = hoja.getRange(filaNum, colNum);
       
-      // Extraemos el dato exacto de esa columna
-      filaVal.push(valoresRaw[f][colIdxArray]);
-      filaFon.push(fondosRaw[f][colIdxArray]);
-      filaFue.push(fuentesRaw[f][colIdxArray]);
-      filaAli.push(alineacionRaw[f][colIdxArray]);
-    }
-    valoresFiltrados.push(filaVal);
-    fondosFiltrados.push(filaFon);
-    fuentesFiltradas.push(filaFue);
-    alineacionFiltrada.push(filaAli);
-  }
+      // --- CORRECCIÓN REDONDEO ---
+      let valor = celda.getValue(); // Usamos valor crudo, no DisplayValue
+      if (typeof valor === 'number') {
+        valor = Math.round(valor); // Hachazo a los decimales
+      }
+      
+      filaVal.push(valor);
+      filaFon.push(celda.getBackground());
+      filaFue.push(celda.getFontWeight());
+      filaAli.push(celda.getHorizontalAlignment());
+    });
+    valoresFiltrados.push(filaVal); fondosFiltrados.push(filaFon);
+    fuentesFiltradas.push(filaFue); alineacionFiltrada.push(filaAli);
+  });
 
   return {
-    numFilas: numFilas,
-    numCols: indicesVisibles.length,
-    valores: valoresFiltrados,
-    fondos: fondosFiltrados,
-    fuentes: fuentesFiltradas,
-    alineacion: alineacionFiltrada
+    numFilas: indicesFilas.length, numCols: indicesCols.length,
+    valores: valoresFiltrados, fondos: fondosFiltrados,
+    fuentes: fuentesFiltradas, alineacion: alineacionFiltrada
   };
 }
 
@@ -176,4 +146,100 @@ function pegarDatosFiltrados(hojaDest, filaIni, colIni, paqueteDatos) {
   rangoDestino.setBackgrounds(paqueteDatos.fondos);
   rangoDestino.setFontWeights(paqueteDatos.fuentes);
   rangoDestino.setHorizontalAlignments(paqueteDatos.alineacion);
+}
+/**
+ * GENERADOR DE IMPRESIÓN COMBINADA (HÍBRIDO: MANUAL + FUENTE GIGANTE)
+ * - Fuente: 18pt (Gigante) para legibilidad máxima.
+ * - Columnas: DEFINIDAS MANUALMENTE POR CÓDIGO (Tú controlas el ancho).
+ * - Ajuste: Mantiene el recorte de sobrantes para que el PDF haga Zoom al máximo.
+ */
+function generarImpresionCombinada() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const nombreHojaDestino = "Impresion_Combinada";
+
+  // 1. LOCALIZAR
+  const hojas = ss.getSheets();
+  const hojaTecnica = hojas.find(h => h.getName().startsWith("Vista_Tecnica"));
+  const hojaCortes = ss.getSheetByName("cortes_impresión");
+
+  if (!hojaTecnica || !hojaCortes) {
+    SpreadsheetApp.getUi().alert("⚠️ Faltan hojas. Ejecuta '▶️ PRODUCCIÓN' primero.");
+    return;
+  }
+
+  // 2. CLONAR
+  let hojaDest = ss.getSheetByName(nombreHojaDestino);
+  if (hojaDest) ss.deleteSheet(hojaDest);
+  hojaDest = hojaTecnica.copyTo(ss);
+  hojaDest.setName(nombreHojaDestino);
+  try { hojaDest.setTabColor("#FF00FF"); } catch(e) {}
+
+  // 3. PEGAR CORTES
+  const lastRowTec = hojaDest.getLastRow();
+  const filaInicioCortes = lastRowTec + 2; // 1 fila de aire
+
+  // Título Separador
+  hojaDest.getRange(filaInicioCortes, 1, 1, 8).merge()
+          .setValue("PLAN DE CORTES Y TALLER")
+          .setBackground("#434343").setFontColor("white")
+          .setFontWeight("bold").setHorizontalAlignment("center")
+          .setFontSize(20);
+
+  const datosCortes = hojaCortes.getDataRange();
+  datosCortes.copyTo(hojaDest.getRange(filaInicioCortes + 1, 1), SpreadsheetApp.CopyPasteType.PASTE_VALUES, false);
+  datosCortes.copyTo(hojaDest.getRange(filaInicioCortes + 1, 1), SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
+
+  // --- ESTRATEGIA VISUAL ---
+  const rangoTotal = hojaDest.getDataRange();
+  
+  // A. FUENTES GIGANTES
+  rangoTotal.setFontSize(18);              // Base gigante
+  hojaDest.getRange("A1").setFontSize(26); // Título Proyecto
+
+  // =======================================================
+  //      👇👇👇 ZONA DE CONTROL DE ANCHOS (PÍXELES) 👇👇👇
+  // =======================================================
+  // Modifica estos números para ajustar tu diseño. 
+  // Al usar fuente 18, los valores deben ser un poco más altos de lo normal.
+  
+  hojaDest.setColumnWidth(1, 109);   // A: Etiqueta
+  hojaDest.setColumnWidth(2, 117);  // B: Ancho / Perfil (Necesita espacio)
+  hojaDest.setColumnWidth(3, 170);   // C: Alto / Medida
+  hojaDest.setColumnWidth(4, 81);   // D: Hueco
+  hojaDest.setColumnWidth(5, 124);   // E: Tipo
+  hojaDest.setColumnWidth(6, 134);   // F: Tester / Extra
+  hojaDest.setColumnWidth(7, 117);   // G: Tester / Extra
+  hojaDest.setColumnWidth(8, 170);   // H: Tester / Extra
+  hojaDest.setColumnWidth(9, 84);   // i: Tester / Extra
+  hojaDest.setColumnWidth(13, 76);   // n: Tester / Extra
+
+  // Columnas de Medidas de Corte (G en adelante)
+  // Ajusta según necesites más o menos espacio para los números
+  for (let i = 10; i <= 20; i++) {
+     try { hojaDest.setColumnWidth(i, 75); } catch(e) {}
+  }
+  // =======================================================
+
+  // B. AJUSTAR FILAS (Automático para que el texto 18 quepa verticalmente)
+  hojaDest.autoResizeRows(1, hojaDest.getLastRow());
+
+  // 4. TRIM (Borrar vacíos - CRÍTICO PARA EL ZOOM)
+  const ultFilaDatos = hojaDest.getLastRow();
+  const ultColDatos = hojaDest.getLastColumn();
+  
+  if (hojaDest.getMaxRows() > ultFilaDatos) {
+    hojaDest.deleteRows(ultFilaDatos + 1, hojaDest.getMaxRows() - ultFilaDatos);
+  }
+  if (hojaDest.getMaxColumns() > ultColDatos) {
+    hojaDest.deleteColumns(ultColDatos + 1, hojaDest.getMaxColumns() - ultColDatos);
+  }
+
+  // 5. ALINEACIÓN FINAL
+  rangoTotal.setVerticalAlignment("middle").setHorizontalAlignment("center");
+  // Wrap activado por si alguna columna manual es muy estrecha y queremos que salte línea
+  rangoTotal.setWrap(true); 
+  
+  hojaDest.setHiddenGridlines(true);
+
+  return hojaDest.getName();
 }
