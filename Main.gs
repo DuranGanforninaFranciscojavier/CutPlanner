@@ -15,6 +15,8 @@ function onOpen() {
       .addItem('🔄 Recalcular Todo', 'actualizarTodo')
       .addItem('👁️ Cambiar Vista', 'actualizarVista')
       .addItem('🎨 Verificar Colores', 'verificarEstructuraYColores') 
+      .addSeparator()
+      .addItem('📄 Generar PDF Taller', 'generarPDFTaller') // <--- AÑADE ESTA LÍNEA
       .addToUi();
 }
 
