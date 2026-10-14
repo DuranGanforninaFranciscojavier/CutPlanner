@@ -13,10 +13,6 @@ function onOpen() {
       .addItem('🧮 MODO SOLO (Solo Calcular)', 'ejecutarModoSolo')
       .addSeparator()
       .addItem('🔄 Recalcular Todo', 'actualizarTodo')
-      .addItem('👁️ Cambiar Vista', 'actualizarVista')
-      .addItem('🎨 Verificar Colores', 'verificarEstructuraYColores') 
-      .addSeparator()
-      .addItem('📄 Generar PDF Taller', 'generarPDFTaller') 
       .addToUi();
 }
 
@@ -45,8 +41,8 @@ function ejecutarModoSolo() {
     const hojaDatos = ss.getSheetByName(HOJA_DATOS_NOMBRE);
     const hojaHistorico = prepararHojaHistorico(ss);
     
-    // 2. SEPARADOR DE PROYECTO (Naranja)
-    gestionarSeparadorProyecto(hojaDatos);
+    // 2. OBTENER PROYECTO ACTIVO
+    const nombreProyecto = obtenerNombreProyecto(hojaDatos);
 
     // 3. ANÁLISIS Y ORDENACIÓN (Específico de Modo Solo)
     console.log("--- 📋 Analizando complejidad de tareas... ---");
@@ -105,7 +101,7 @@ function ejecutarModoSolo() {
         let barrasUsadasReales = solucionFinal.filter(b => b.esVirtual).length;
         if (barrasUsadasReales > 0) resumenCompra.set(nombrePerfil, barrasUsadasReales);
         
-        const [nuevosRetales, materialUsado] = escribirResultadosEnHistorico(hojaHistorico, solucionFinal, nombrePerfil, trabajo.cortes.length, "MODO_SOLO");
+        const [nuevosRetales, materialUsado] = escribirResultadosEnHistorico(hojaHistorico, solucionFinal, nombrePerfil, trabajo.cortes.length, "MODO_SOLO", nombreProyecto);
         if (nuevosRetales && nuevosRetales.length > 0) todosLosRetalesGenerados.push(...nuevosRetales);
         
         trabajosProcesados++;
@@ -159,8 +155,8 @@ function ejecutarOptimizacion() {
     const hojaHistorico = prepararHojaHistorico(ss);
     const huellasExistentes = cargarHuellasExistentes(hojaHistorico);
 
-    // 2. SEPARADOR DE PROYECTO (Naranja)
-    gestionarSeparadorProyecto(hojaDatos);
+    // 2. OBTENER PROYECTO ACTIVO
+    const nombreProyecto = obtenerNombreProyecto(hojaDatos);
 
     // 3. BUCLE PRINCIPAL
     for (const configPerfil of TODOS_PERFILES) { 
@@ -194,8 +190,8 @@ function ejecutarOptimizacion() {
         } else {
           barrasNuevasVirtuales++;
           if (barrasNuevasVirtuales > LIMITE_BARRAS_VIRTUALES) {
-             ALERTAS.push(`❌ ${nombrePerfil}: No se encontró solución.`);
-             break;
+              ALERTAS.push(`❌ ${nombrePerfil}: No se encontró solución.`);
+              break;
           }
           stockParaIntentar.push(crearBarraVirtual(nombrePerfil, barrasNuevasVirtuales));
         }
@@ -204,7 +200,7 @@ function ejecutarOptimizacion() {
       if (solucionFinal) {
         if (barrasNuevasVirtuales > 0) ALERTAS.push(`❗️ Se necesitaron ${barrasNuevasVirtuales} BARRAS NUEVAS.`);
         
-        const [nuevosRetales, materialUsado] = escribirResultadosEnHistorico(hojaHistorico, solucionFinal, nombrePerfil, trabajo.cortes.length, trabajo.huella);
+        const [nuevosRetales, materialUsado] = escribirResultadosEnHistorico(hojaHistorico, solucionFinal, nombrePerfil, trabajo.cortes.length, trabajo.huella, nombreProyecto);
         actualizarInventario(ss, materialUsado, nuevosRetales);
         
         const alertaStock = comprobarStockMinimo(ss, nombrePerfil);
@@ -215,10 +211,12 @@ function ejecutarOptimizacion() {
       }
     } 
     
-    // 4. FINALIZACIÓN ESPECÍFICA (Inventario Visual)
+    // 4. FINALIZACIÓN ESPECÍFICA
     SpreadsheetApp.flush();
-    aplicarFormatosInventario(configSheet, inventarioSheet); 
-    SpreadsheetApp.flush(); 
+    if (typeof aplicarFormatosInventario === 'function') {
+      aplicarFormatosInventario(configSheet, inventarioSheet); 
+      SpreadsheetApp.flush(); 
+    } 
 
     // 5. FINALIZACIÓN COMÚN
     finalizarEjecucionComun(ss, trabajosProcesados, todosLosIdsParaMarcar, horaInicioTotal, "Modo Producción");
@@ -236,52 +234,34 @@ function ejecutarOptimizacion() {
  */
 
 /**
- * Detecta si hay trabajos pendientes e inserta el separador de proyecto en Plan_Cortes.
+ * Detecta si hay trabajos pendientes y extrae el Nombre del Proyecto usando mapeo dinámico.
  */
-/**
- * Detecta si hay trabajos pendientes e inserta el separador de proyecto en Plan_Cortes.
- * - Lee la Columna 23 (W) para obtener el Nombre del Proyecto.
- */
-function gestionarSeparadorProyecto(hojaDatos) {
+function obtenerNombreProyecto(hojaDatos) {
   try {
     const lastRow = hojaDatos.getLastRow();
-    if (lastRow < 3) return;
+    if (lastRow < FILA_INICIO_DATOS) return "PROYECTO GENERAL";
 
-    // Columna I (9) = Check Hecha
-    // Columna W (23) = Nombre Proyecto
-    // Leemos ambos rangos para cruzar datos
-    const rangoChecks = hojaDatos.getRange(3, 9, lastRow - 2, 1).getValues();
-    
-    // Verificamos si existe la columna W, si no, evitamos error
-    let rangoNombres;
-    if (hojaDatos.getMaxColumns() >= 23) {
-      rangoNombres = hojaDatos.getRange(3, 23, lastRow - 2, 1).getValues();
-    } else {
-      console.warn("⚠️ La hoja no tiene Columna W (23) para el nombre del proyecto.");
-      rangoNombres = new Array(lastRow - 2).fill([""]);
-    }
-    
-    // Buscamos la PRIMERA fila que esté pendiente (Check != TRUE)
-    for (let i = 0; i < rangoChecks.length; i++) {
-      const hecha = rangoChecks[i][0];
-      if (hecha !== true && String(hecha).toUpperCase() !== "TRUE") {
-        // Encontramos trabajo pendiente. ¿Qué proyecto es?
-        let nombreProyecto = rangoNombres[i][0];
-        
-        if (!nombreProyecto || nombreProyecto === "") {
-          nombreProyecto = "PROYECTO SIN NOMBRE (Revisar Col W)";
+    const colMap = getHeaderMap(hojaDatos, FILA_CABECERA);
+    const colProyecto = colMap.getCol("Nombre_Proyecto") || colMap.getCol("Proyecto");
+    const colCheck = colMap.getCol("Estado_Ventana") || colMap.getCol("Calculado") || colMap.getCol("Hecha");
+
+    if (colProyecto && colCheck) {
+      const numFilas = lastRow - FILA_INICIO_DATOS + 1;
+      const rangoChecks = hojaDatos.getRange(FILA_INICIO_DATOS, colCheck, numFilas, 1).getValues();
+      const rangoNombres = hojaDatos.getRange(FILA_INICIO_DATOS, colProyecto, numFilas, 1).getValues();
+
+      for (let i = 0; i < rangoChecks.length; i++) {
+        const hecha = rangoChecks[i][0];
+        if (hecha !== true && String(hecha).toUpperCase() !== "TRUE") {
+          const nombre = String(rangoNombres[i][0] || "").trim();
+          if (nombre) return nombre;
         }
-        
-        // Insertamos separador y salimos (solo uno por lote)
-        if (typeof insertarSeparadorProyecto === 'function') {
-          insertarSeparadorProyecto(nombreProyecto);
-        }
-        return; 
       }
     }
   } catch(e) {
-    console.warn("Error insertando separador: " + e);
+    console.warn("Error obteniendo nombre de proyecto: " + e);
   }
+  return "PROYECTO GENERAL";
 }
 
 /**
@@ -292,19 +272,14 @@ function finalizarEjecucionComun(ss, trabajosProcesados, idsParaMarcar, horaInic
   const tiempoTotal = ((new Date() - horaInicio) / 1000).toFixed(1);
 
   if (trabajosProcesados > 0) {
-    // 1. Generar Vistas Visuales
-    generarVistaTecnicaAuto();
-    dividirTablaParaImpresionClonada();
-
-    // 2. Marcar como realizados en la hoja de datos
+    // 1. Marcar como realizados en la hoja de datos
     if (idsParaMarcar.length > 0) {
       console.log("\n--- Marcando trabajos como REALIZADOS ---");
       marcarCortesComoHechos(ss.getSheetByName(HOJA_DATOS_NOMBRE), idsParaMarcar);
     }
 
-    // 3. Alerta Final
+    // 2. Alerta Final
     let mensaje = `✅ ¡${nombreModo} Completado en ${tiempoTotal}s!\nSe procesaron ${trabajosProcesados} perfiles.`;
-    generarPDFTaller();
     if (ALERTAS.length > 0) {
       mensaje += "\n\n⚠️ RESUMEN:\n" + ALERTAS.join("\n");
     }
